@@ -1,7 +1,7 @@
 ---
 name: dzcz-merchant-ops
 description: Run local merchant/back-office browser automation through the dzcz merchant-ops runner and agent-browser. Use when the user asks Hermes to enroll a login profile, check a saved browser login state, run a merchant operation workflow, explore a browser workflow, or validate Bilibili test flows before moving to real merchant backends.
-version: 0.2.0
+version: 0.3.0
 author: dzcz
 license: MIT
 platforms: [windows, macos]
@@ -161,6 +161,14 @@ When a user requests an operation:
 
 Do not ask for passwords or cookies. Login is done by opening the persistent profile and letting the operator log in manually.
 
+## Workflow Discovery Rules
+
+1. **优先查 workflow show** - 如果用户请求的操作有现成工作流，直接使用
+2. **没有 workflow 才探索** - 如果没有现成工作流，使用探索执行
+3. **探索成功后询问是否封装** - 执行成功后，询问用户是否保存为 draft workflow
+4. **stable workflow 默认可执行** - stable 状态的工作流可以直接执行
+5. **candidate workflow 执行前说明风险** - candidate 状态的工作流需要告知用户风险
+
 ## Login Flow Handling
 
 The runner supports multiple login methods:
@@ -191,6 +199,69 @@ For permanent errors or manual intervention required, Hermes should:
 ## Concurrency
 
 The runner serializes execution with a global lock and a per-profile lock. If a lock is held, report that another browser task is running and ask the user to retry after it finishes.
+
+## Workflow Lifecycle
+
+Workflows have a lifecycle status:
+
+- **ad_hoc**: 临时执行，未封装
+- **candidate**: 已封装但未充分验证
+- **stable**: 多次验证通过，可默认使用
+- **deprecated**: 页面结构变化或不再使用
+
+Status transitions: `ad_hoc → candidate → stable → deprecated`
+
+### Workflow Management Commands
+
+```bash
+# 保存工作流定义
+merchant-ops workflow save <workflow_file.json>
+
+# 提升工作流状态
+merchant-ops workflow promote <workflow_id>
+
+# 废弃工作流
+merchant-ops workflow deprecate <workflow_id>
+
+# 列出所有工作流
+merchant-ops workflow list
+```
+
+## Failure Reporting
+
+When a workflow fails, the runner provides standardized failure reports:
+
+```json
+{
+  "run_id": "xxx",
+  "workflow_id": "xxx",
+  "stage": "precheck|action|confirm|login|browser",
+  "reason": "Human-readable failure reason",
+  "next_action": "Suggested next action for operator",
+  "artifact_dir": "/path/to/artifacts",
+  "screenshot": "/path/to/screenshot.png"
+}
+```
+
+Hermes should use `stage` to provide specific guidance:
+- **precheck**: 检查登录状态、页面加载
+- **action**: 检查元素选择器、页面结构
+- **confirm**: 检查操作是否真正生效
+- **login**: 引导用户重新登录
+- **browser**: 检查浏览器状态
+
+## Diagnostics Export
+
+Export diagnostic packages for remote troubleshooting:
+
+```bash
+merchant-ops task export --run-id <run_id> --output <output_dir>
+```
+
+This creates a package with:
+- run_info.json - Run metadata
+- artifacts/ - Screenshots and logs
+- summary.json - Export summary
 
 ## Migration Notes
 

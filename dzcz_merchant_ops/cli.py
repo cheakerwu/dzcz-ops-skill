@@ -887,6 +887,49 @@ def command_workflow_promote(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def command_workflow_save(args: argparse.Namespace) -> dict[str, Any]:
+    """Save a workflow from JSON file."""
+    from dzcz_merchant_ops.workflow_manager import WorkflowManager
+
+    data_dir = Path(args.data_dir).expanduser()
+    manager = WorkflowManager(data_dir)
+
+    workflow_file = Path(args.workflow_file)
+    if not workflow_file.exists():
+        raise UserFacingError(f"Workflow file not found: {workflow_file}")
+
+    with open(workflow_file, encoding="utf-8") as f:
+        workflow_data = json.load(f)
+
+    schema = manager.save_draft(workflow_data)
+
+    return {
+        "status": "ok",
+        "workflow_id": schema.workflow_id,
+        "workflow_status": schema.status.value,
+        "message": f"Workflow saved as draft: {schema.workflow_id}",
+    }
+
+
+def command_workflow_deprecate(args: argparse.Namespace) -> dict[str, Any]:
+    """Deprecate a workflow."""
+    from dzcz_merchant_ops.workflow_manager import WorkflowManager
+
+    data_dir = Path(args.data_dir).expanduser()
+    manager = WorkflowManager(data_dir)
+
+    try:
+        schema = manager.deprecate_workflow(args.workflow_id)
+    except FileNotFoundError:
+        raise UserFacingError(f"Workflow not found: {args.workflow_id}")
+
+    return {
+        "status": "ok",
+        "workflow_id": schema.workflow_id,
+        "message": f"Workflow deprecated: {args.workflow_id}",
+    }
+
+
 def command_task_run(args: argparse.Namespace) -> dict[str, Any]:
     data_dir = Path(args.data_dir).expanduser()
     db = connect_db(data_dir)
@@ -1074,6 +1117,28 @@ def command_task_report(args: argparse.Namespace) -> dict[str, Any]:
         "result": result,
         "commands": command_summaries,
         "diagnostics": diagnostics,
+    }
+
+
+def command_task_export(args: argparse.Namespace) -> dict[str, Any]:
+    """Export diagnostics for a run."""
+    from dzcz_merchant_ops.diagnostics import DiagnosticsExporter
+
+    data_dir = Path(args.data_dir).expanduser()
+    exporter = DiagnosticsExporter(data_dir)
+
+    export_path = Path(args.output)
+
+    try:
+        exporter.export(args.run_id, export_path)
+    except FileNotFoundError:
+        raise UserFacingError(f"Run not found: {args.run_id}")
+
+    return {
+        "status": "ok",
+        "run_id": args.run_id,
+        "export_path": str(export_path),
+        "message": f"Diagnostics exported to: {export_path}",
     }
 
 
@@ -1447,6 +1512,11 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--workflow")
     report.set_defaults(func=command_task_report)
 
+    task_export = task_sub.add_parser("export", help="export diagnostics for a run")
+    task_export.add_argument("--run-id", required=True, help="run ID to export")
+    task_export.add_argument("--output", required=True, help="output directory")
+    task_export.set_defaults(func=command_task_export)
+
     workflow = sub.add_parser("workflow", help="manage workflow metadata")
     workflow_sub = workflow.add_subparsers(dest="workflow_command", required=True)
     workflow_list = workflow_sub.add_parser("list", help="list known workflows")
@@ -1457,6 +1527,14 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_promote = workflow_sub.add_parser("promote", help="mark a workflow stable")
     workflow_promote.add_argument("workflow_id")
     workflow_promote.set_defaults(func=command_workflow_promote)
+
+    workflow_save = workflow_sub.add_parser("save", help="save a workflow definition from JSON file")
+    workflow_save.add_argument("workflow_file", help="path to workflow JSON file")
+    workflow_save.set_defaults(func=command_workflow_save)
+
+    workflow_deprecate = workflow_sub.add_parser("deprecate", help="deprecate a workflow")
+    workflow_deprecate.add_argument("workflow_id")
+    workflow_deprecate.set_defaults(func=command_workflow_deprecate)
     return parser
 
 
