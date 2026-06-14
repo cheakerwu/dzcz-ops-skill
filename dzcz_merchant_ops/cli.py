@@ -929,7 +929,6 @@ def command_workflow_save(args: argparse.Namespace) -> dict[str, Any]:
 def command_workflow_deprecate(args: argparse.Namespace) -> dict[str, Any]:
     """Deprecate a workflow."""
     from dzcz_merchant_ops.workflow_manager import WorkflowManager
-    from dzcz_merchant_ops.workflow_schema import WorkflowSchema, WorkflowStatus
 
     data_dir = Path(args.data_dir).expanduser()
     manager = WorkflowManager(data_dir)
