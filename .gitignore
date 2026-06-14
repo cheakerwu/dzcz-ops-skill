@@ -8,3 +8,5 @@ __pycache__/
 *.egg-info/
 .env
 .dzcz-merchant-ops/
+test.log
+test_output.txt

@@ -1,7 +1,7 @@
 ---
 name: dzcz-merchant-ops
 description: Run local merchant/back-office browser automation through the dzcz merchant-ops runner and agent-browser. Use when the user asks Hermes to enroll a login profile, check a saved browser login state, run a merchant operation workflow, explore a browser workflow, or validate Bilibili test flows before moving to real merchant backends.
-version: 0.1.0
+version: 0.2.0
 author: dzcz
 license: MIT
 platforms: [windows, macos]
@@ -156,8 +156,36 @@ When a user requests an operation:
 3. Run the wrapper command with `--json`.
 4. Return the runner status, `run_id`, artifact directory, screenshot path, and any error.
 5. If status is `failed`, include the runner error and artifact directory.
+6. If login expired or requires manual intervention, guide the operator through the login process.
 
 Do not ask for passwords or cookies. Login is done by opening the persistent profile and letting the operator log in manually.
+
+## Login Flow Handling
+
+The runner supports multiple login methods:
+
+- **Password login**: Requires manual intervention
+- **SMS verification**: Requires manual intervention (operator receives code)
+- **QR code scan**: Requires manual intervention (operator scans with phone)
+
+When a login is required:
+1. Runner detects login status via `LoginDetectionStep`
+2. If login expired, raises `LoginExpiredError` with `requires_intervention=True`
+3. Hermes should guide the operator to complete login manually
+4. After login, re-run the workflow
+
+## Error Recovery
+
+The runner automatically recovers from transient errors:
+
+- **BrowserError**: Retries with exponential backoff
+- **LoginExpiredError**: Triggers re-login flow
+- **PageLoadError**: Reloads page
+
+For permanent errors or manual intervention required, Hermes should:
+1. Report the error to the operator
+2. Provide guidance on how to fix it
+3. Allow re-running the workflow after fix
 
 ## Concurrency
 
@@ -171,13 +199,16 @@ Workflow definitions and registry schema are portable. Browser profile directori
 
 The runner uses a pipeline-based architecture for workflow execution:
 
-- **Pipeline**: Sequential step execution with per-step retry
+- **Pipeline**: Sequential step execution with per-step retry and error recovery
 - **Step**: Abstract base with `execute_with_retry()` for BrowserError recovery
 - **Context**: Immutable state passing through pipeline
 - **RetryPolicy**: Exponential backoff with jitter (configurable)
 - **LockManager**: Per-profile async locks with deadlock detection
 - **StructuredLogger**: JSON-lines logging with TaskLog/StepLog
 - **MetricsCollector**: Counters, gauges, histograms with p95
+- **LoginDetectionStep**: Login status detection (password/SMS/QR code)
+- **InterventionManager**: Manual intervention handling for complex login flows
+- **RecoveryManager**: Error recovery strategies (login, page load, retry)
 
 ## Testing
 
