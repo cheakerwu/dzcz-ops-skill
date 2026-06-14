@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,13 @@ class DiagnosticsExporter:
         """
         self.data_dir = Path(data_dir)
         self.artifacts_dir = self.data_dir / "artifacts"
-        self.runs_dir = self.data_dir / "runs"
+        self.db_path = self.data_dir / "registry.sqlite"
+
+    def _connect_db(self) -> sqlite3.Connection:
+        """Connect to SQLite database."""
+        db = sqlite3.connect(self.db_path)
+        db.row_factory = sqlite3.Row
+        return db
 
     def list_runs(self) -> list[dict[str, Any]]:
         """List all available runs.
@@ -29,20 +36,27 @@ class DiagnosticsExporter:
         Returns:
             List of run summaries
         """
-        runs = []
-        for run_file in self.runs_dir.glob("*.json"):
-            try:
-                with open(run_file, encoding="utf-8") as f:
-                    data = json.load(f)
-                runs.append({
-                    "run_id": data.get("run_id", run_file.stem),
-                    "workflow_id": data.get("workflow_id"),
-                    "status": data.get("status"),
-                })
-            except (json.JSONDecodeError, KeyError):
-                continue
+        if not self.db_path.exists():
+            return []
 
-        return runs
+        db = self._connect_db()
+        try:
+            cursor = db.execute(
+                "SELECT run_id, workflow_id, profile_id, status, started_at, finished_at FROM runs ORDER BY started_at DESC"
+            )
+            runs = []
+            for row in cursor:
+                runs.append({
+                    "run_id": row["run_id"],
+                    "workflow_id": row["workflow_id"],
+                    "profile_id": row["profile_id"],
+                    "status": row["status"],
+                    "started_at": row["started_at"],
+                    "finished_at": row["finished_at"],
+                })
+            return runs
+        finally:
+            db.close()
 
     def export(self, run_id: str, export_path: Path) -> Path:
         """Export diagnostics for a run.
@@ -60,30 +74,45 @@ class DiagnosticsExporter:
         export_path = Path(export_path)
         export_path.mkdir(parents=True, exist_ok=True)
 
-        # Load run info
-        run_file = self.runs_dir / f"{run_id}.json"
-        if not run_file.exists():
-            raise FileNotFoundError(f"Run not found: {run_id}")
+        # Load run info from SQLite
+        if not self.db_path.exists():
+            raise FileNotFoundError(f"Database not found: {self.db_path}")
 
-        with open(run_file, encoding="utf-8") as f:
-            run_info = json.load(f)
+        db = self._connect_db()
+        try:
+            cursor = db.execute(
+                "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise FileNotFoundError(f"Run not found: {run_id}")
+
+            run_info = dict(row)
+        finally:
+            db.close()
 
         # Copy run info
         with open(export_path / "run_info.json", "w", encoding="utf-8") as f:
             json.dump(run_info, f, indent=2, ensure_ascii=False)
 
         # Copy artifacts
-        run_artifacts = self.artifacts_dir / run_id
-        if run_artifacts.exists():
-            dest_artifacts = export_path / "artifacts"
-            shutil.copytree(run_artifacts, dest_artifacts, dirs_exist_ok=True)
+        artifact_dir = run_info.get("artifact_dir", "")
+        if artifact_dir:
+            run_artifacts = Path(artifact_dir)
+            if run_artifacts.exists():
+                dest_artifacts = export_path / "artifacts"
+                shutil.copytree(run_artifacts, dest_artifacts, dirs_exist_ok=True)
 
         # Create summary
         exported_files = list(export_path.rglob("*"))
         summary = {
             "run_id": run_id,
             "workflow_id": run_info.get("workflow_id"),
+            "profile_id": run_info.get("profile_id"),
             "status": run_info.get("status"),
+            "started_at": run_info.get("started_at"),
+            "finished_at": run_info.get("finished_at"),
+            "error": run_info.get("error"),
             "exported_files": [str(f.relative_to(export_path)) for f in exported_files if f.is_file()],
         }
 

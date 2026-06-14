@@ -1,6 +1,7 @@
 """Tests for diagnostics export."""
 import pytest
 import json
+import sqlite3
 from pathlib import Path
 from dzcz_merchant_ops.diagnostics import DiagnosticsExporter
 
@@ -20,14 +21,29 @@ def tmp_data_dir(tmp_path):
     }))
     (artifacts_dir / "error.txt").write_text("Test error")
 
-    # Create run record
-    runs_dir = tmp_path / "runs"
-    runs_dir.mkdir()
-    (runs_dir / "test-run-123.json").write_text(json.dumps({
-        "run_id": "test-run-123",
-        "workflow_id": "test.workflow",
-        "status": "failed",
-    }))
+    # Create SQLite database with run record
+    db_path = tmp_path / "registry.sqlite"
+    db = sqlite3.connect(db_path)
+    db.execute("""
+        CREATE TABLE runs (
+            run_id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL,
+            profile_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            input_json TEXT NOT NULL,
+            artifact_dir TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            error TEXT,
+            result_json TEXT
+        )
+    """)
+    db.execute(
+        "INSERT INTO runs (run_id, workflow_id, profile_id, status, input_json, artifact_dir, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("test-run-123", "test.workflow", "test-profile", "failed", "{}", str(artifacts_dir), "2026-06-14T00:00:00")
+    )
+    db.commit()
+    db.close()
 
     return tmp_path
 

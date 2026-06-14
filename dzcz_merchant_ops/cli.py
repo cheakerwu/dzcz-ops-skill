@@ -396,6 +396,21 @@ def parse_agent_browser_json_stdout(stdout: str) -> Any | None:
     return None
 
 
+def _get_next_action(stage: 'FailureStage', error: str) -> str:
+    """Get suggested next action based on failure stage."""
+    from dzcz_merchant_ops.failure_reporter import FailureStage
+    if stage == FailureStage.LOGIN:
+        return "Open profile and log in manually, then re-run the workflow"
+    elif stage == FailureStage.PRECHECK:
+        return "Check login state and page load, ensure profile is logged in"
+    elif stage == FailureStage.ACTION:
+        return "Inspect screenshot to see current page state, check if selectors changed"
+    elif stage == FailureStage.CONFIRM:
+        return "Check operation_result in result.json to see what happened"
+    else:
+        return "Inspect artifacts directory for screenshots and command logs"
+
+
 def extract_operation_result(commands: list[CommandResult]) -> Any | None:
     for command in reversed(commands):
         if "eval" not in command.args:
@@ -914,14 +929,30 @@ def command_workflow_save(args: argparse.Namespace) -> dict[str, Any]:
 def command_workflow_deprecate(args: argparse.Namespace) -> dict[str, Any]:
     """Deprecate a workflow."""
     from dzcz_merchant_ops.workflow_manager import WorkflowManager
+    from dzcz_merchant_ops.workflow_schema import WorkflowSchema, WorkflowStatus
 
     data_dir = Path(args.data_dir).expanduser()
     manager = WorkflowManager(data_dir)
 
+    workflow_id = args.workflow_id
+
+    # Check if it's a built-in workflow
+    built_in = built_in_workflows()
+    if workflow_id in built_in:
+        # Save built-in workflow to file and deprecate it
+        workflow_data = built_in[workflow_id]
+        workflow_data["status"] = "deprecated"
+        schema = manager.save_draft(workflow_data)
+        return {
+            "status": "ok",
+            "workflow_id": workflow_id,
+            "message": f"Built-in workflow deprecated: {workflow_id}",
+        }
+
     try:
-        schema = manager.deprecate_workflow(args.workflow_id)
+        schema = manager.deprecate_workflow(workflow_id)
     except FileNotFoundError:
-        raise UserFacingError(f"Workflow not found: {args.workflow_id}")
+        raise UserFacingError(f"Workflow not found: {workflow_id}")
 
     return {
         "status": "ok",
@@ -1000,6 +1031,33 @@ def command_task_run(args: argparse.Namespace) -> dict[str, Any]:
         status = "failed"
         error = str(exc)
         (artifact_dir / "error.txt").write_text(error, encoding="utf-8")
+
+        # Generate structured failure report
+        from dzcz_merchant_ops.failure_reporter import FailureStage, create_failure_report
+        failure_stage = FailureStage.BROWSER
+        if "login" in error.lower() or "not logged in" in error.lower():
+            failure_stage = FailureStage.LOGIN
+        elif "preflight" in error.lower():
+            failure_stage = FailureStage.PRECHECK
+        elif "confirm" in error.lower() or "operation_result" in error.lower():
+            failure_stage = FailureStage.CONFIRM
+        elif "element" in error.lower() or "selector" in error.lower():
+            failure_stage = FailureStage.ACTION
+
+        failure_report = create_failure_report(
+            run_id=run_id,
+            workflow_id=workflow_id,
+            stage=failure_stage,
+            reason=error,
+            next_action=_get_next_action(failure_stage, error),
+            artifact_dir=str(artifact_dir),
+            screenshot=str(final_screenshot) if final_screenshot.exists() else None,
+        )
+        (artifact_dir / "failure_report.json").write_text(
+            failure_report.to_json(),
+            encoding="utf-8",
+        )
+
         session_was_opened = any("open" in command.args for command in commands)
         if session_was_opened:
             with contextlib.suppress(Exception):
@@ -1030,7 +1088,8 @@ def command_task_run(args: argparse.Namespace) -> dict[str, Any]:
     )
     db.commit()
 
-    return {
+    # Build response with failure report if failed
+    response = {
         "status": status,
         "workflow_id": workflow_id,
         "run_id": run_id,
@@ -1043,6 +1102,16 @@ def command_task_run(args: argparse.Namespace) -> dict[str, Any]:
         if status == "succeeded"
         else "task failed; inspect artifacts for browser output",
     }
+
+    # Add failure report if failed
+    if status == "failed":
+        failure_report_path = artifact_dir / "failure_report.json"
+        if failure_report_path.exists():
+            with contextlib.suppress(Exception):
+                failure_report = json.loads(failure_report_path.read_text(encoding="utf-8"))
+                response["failure_report"] = failure_report
+
+    return response
 
 
 def command_task_report(args: argparse.Namespace) -> dict[str, Any]:
