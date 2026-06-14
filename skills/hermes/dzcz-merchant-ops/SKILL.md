@@ -55,6 +55,7 @@ meituan__zs-kr__ops01
 - `bilibili.video.like.fixed`: input `video_url`; deterministic DOM workflow, preferred for local validation
 - `bilibili.video.like`: input `video_url`; AI-driven workflow, requires `AI_GATEWAY_API_KEY`
 - `bilibili.dm.send`: inputs `dm_url`, `message`
+- `bilibili.search.like.first`: input `keyword`; search for videos and like the first result
 
 Treat these as technical validation flows. They prove profile enrollment, profile matching, agent-browser execution, artifact capture, and Hermes invocation before real merchant backends are available.
 

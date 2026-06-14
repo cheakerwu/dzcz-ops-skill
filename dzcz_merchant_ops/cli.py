@@ -560,6 +560,45 @@ def built_in_workflows() -> dict[str, dict[str, Any]]:
             "required_inputs": ["dm_url", "message"],
             "description": "Open a Bilibili direct-message URL and send one test message.",
         },
+        "bilibili.search.like.first": {
+            "workflow_id": "bilibili.search.like.first",
+            "platform": "bilibili",
+            "operation": "search.like",
+            "status": "stable",
+            "requires_ai": False,
+            "required_inputs": ["keyword"],
+            "executor": "agent_browser.deterministic",
+            "session_policy": "reuse_ops_session",
+            "phases": [
+                {
+                    "name": "search",
+                    "description": "Search for videos with the given keyword on Bilibili.",
+                },
+                {
+                    "name": "select",
+                    "description": "Click the first video in search results.",
+                },
+                {
+                    "name": "like",
+                    "description": "Like the video if not already liked.",
+                },
+                {
+                    "name": "confirm",
+                    "description": "Confirm the video was liked successfully.",
+                },
+            ],
+            "success_condition": {
+                "json_path": "operation_result.confirmed",
+                "equals": True,
+                "description": "operation_result.confirmed == true and operation_result.after.liked == true",
+            },
+            "failure_hints": [
+                "Open the profile ops session and confirm the Bilibili page is logged in.",
+                "Inspect final.png and command-*.json in the artifact directory.",
+                "If search selectors changed, update the deterministic workflow script.",
+            ],
+            "description": "Search for videos on Bilibili and like the first result.",
+        },
     }
 
 
@@ -1074,6 +1113,8 @@ def run_workflow(
         return run_bilibili_video_like_fixed(profile, inputs, artifact_dir, session, timeout)
     if workflow_id == "bilibili.dm.send":
         return run_bilibili_dm_send(profile, inputs, artifact_dir, session, timeout)
+    if workflow_id == "bilibili.search.like.first":
+        return run_bilibili_search_like_first(profile, inputs, artifact_dir, session, timeout)
     raise UserFacingError(f"no executor for workflow: {workflow_id}")
 
 
@@ -1177,6 +1218,112 @@ def run_bilibili_dm_send(
         artifact_dir=artifact_dir,
         timeout=timeout,
     )
+
+
+def run_bilibili_search_like_first(
+    profile: dict[str, Any],
+    inputs: dict[str, Any],
+    artifact_dir: Path,
+    session: str,
+    timeout: int,
+) -> list[CommandResult]:
+    keyword = str(inputs["keyword"]).strip()
+    if not keyword:
+        raise UserFacingError("keyword must not be empty")
+
+    search_url = f"https://search.bilibili.com/all?keyword={keyword}"
+
+    like_script = r"""
+const WAIT = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function run() {
+    // Wait for search results to load
+    await WAIT(3000);
+
+    // Click the first video in search results
+    const firstVideo = document.querySelector('.bili-video-card a');
+    if (!firstVideo) {
+        return { ok: false, error: 'no_video_found', detail: 'No video card found in search results' };
+    }
+
+    const videoTitle = firstVideo.textContent?.trim() || 'Unknown';
+    const videoUrl = firstVideo.href || '';
+
+    // Click the video
+    firstVideo.click();
+    await WAIT(5000);
+
+    // Check if logged in
+    const loginBtn = document.querySelector('.mini-avatar');
+    if (!loginBtn) {
+        return { ok: false, error: 'not_logged_in', detail: 'Login required' };
+    }
+
+    // Find like button
+    const likeBtn = document.querySelector('.like-icon, [class*="like"]');
+    if (!likeBtn) {
+        return { ok: false, error: 'like_button_missing', detail: 'Like button not found' };
+    }
+
+    // Check if already liked
+    const isLiked = likeBtn.classList.contains('active') ||
+                    likeBtn.classList.contains('liked') ||
+                    likeBtn.querySelector('.liked') !== null;
+
+    if (isLiked) {
+        return {
+            ok: true,
+            confirmed: true,
+            clicked: false,
+            before: { liked: true },
+            after: { liked: true },
+            video: { title: videoTitle, url: videoUrl }
+        };
+    }
+
+    // Click like
+    likeBtn.click();
+    await WAIT(1000);
+
+    // Verify like was applied
+    const afterLiked = likeBtn.classList.contains('active') ||
+                       likeBtn.classList.contains('liked') ||
+                       likeBtn.querySelector('.liked') !== null;
+
+    return {
+        ok: true,
+        confirmed: afterLiked,
+        clicked: true,
+        before: { liked: false },
+        after: { liked: afterLiked },
+        video: { title: videoTitle, url: videoUrl }
+    };
+}
+
+return run();
+"""
+
+    results: list[CommandResult] = []
+
+    # Step 1: Search
+    search_instruction = (
+        f"Search for '{keyword}' on Bilibili. "
+        "Navigate to the search page and wait for results to load."
+    )
+    search_result = execute_agent_browser_flow(
+        profile=profile,
+        session=session,
+        url=search_url,
+        instruction=search_instruction,
+        artifact_dir=artifact_dir,
+        timeout=timeout,
+        deterministic_steps=(
+            ("search_and_like", ["eval", like_script]),
+        ),
+    )
+    results.extend(search_result)
+
+    return results
 
 
 def execute_agent_browser_flow(
