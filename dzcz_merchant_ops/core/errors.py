@@ -2,6 +2,19 @@
 from enum import Enum
 
 
+__all__ = [
+    "ErrorSeverity",
+    "BrowserError",
+    "InfrastructureError",
+    "LoginExpiredError",
+    "PageLoadError",
+    "ElementNotFoundError",
+    "CircuitBreakerOpenError",
+    "DeadlockError",
+    "LockError",
+]
+
+
 class ErrorSeverity(Enum):
     """Error severity levels."""
     TRANSIENT = "transient"    # Transient errors, can be retried
@@ -19,15 +32,35 @@ class BrowserError(Exception):
         self.retryable = retryable
 
 
-class LoginExpiredError(BrowserError):
-    """Login expired error."""
+class InfrastructureError(Exception):
+    """Base class for infrastructure-level errors (circuit breaker, locks, etc.)."""
 
-    def __init__(self, profile_id: str):
+    def __init__(self, message: str, severity: ErrorSeverity = ErrorSeverity.TRANSIENT,
+                 retryable: bool = True):
+        super().__init__(message)
+        self.severity = severity
+        self.retryable = retryable
+
+
+class LoginExpiredError(BrowserError):
+    """Login expired error.
+
+    Login expiry is transient and retryable because the session can be
+    refreshed or the user can re-authenticate to recover.
+    """
+
+    def __init__(self, message: str = "", profile_id: str = "",
+                 platform: str = "", requires_intervention: bool = False):
+        if not message:
+            message = f"Login expired for profile {profile_id}"
         super().__init__(
-            f"Login expired for profile {profile_id}",
-            severity=ErrorSeverity.PERMANENT,
-            retryable=False
+            message,
+            severity=ErrorSeverity.TRANSIENT,
+            retryable=True
         )
+        self.profile_id = profile_id
+        self.platform = platform
+        self.requires_intervention = requires_intervention
 
 
 class PageLoadError(BrowserError):
@@ -52,16 +85,22 @@ class ElementNotFoundError(BrowserError):
         )
 
 
-class CircuitBreakerOpenError(Exception):
+class CircuitBreakerOpenError(InfrastructureError):
     """Circuit breaker is open error."""
-    pass
+
+    def __init__(self, message: str = "Circuit breaker is open"):
+        super().__init__(message, severity=ErrorSeverity.TRANSIENT, retryable=True)
 
 
-class DeadlockError(Exception):
+class DeadlockError(InfrastructureError):
     """Deadlock detected error."""
-    pass
+
+    def __init__(self, message: str = "Deadlock detected"):
+        super().__init__(message, severity=ErrorSeverity.CRITICAL, retryable=False)
 
 
-class LockError(Exception):
+class LockError(InfrastructureError):
     """Lock operation error."""
-    pass
+
+    def __init__(self, message: str = "Lock operation failed"):
+        super().__init__(message, severity=ErrorSeverity.TRANSIENT, retryable=True)

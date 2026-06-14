@@ -7,6 +7,8 @@ from dzcz_merchant_ops.core.context import Context
 from dzcz_merchant_ops.core.errors import BrowserError
 from dzcz_merchant_ops.core.retry import RetryPolicy
 
+__all__ = ["Step"]
+
 
 class Step(ABC):
     """Base class for workflow steps.
@@ -69,4 +71,7 @@ class Step(ABC):
                 else:
                     raise
 
-        raise last_error
+        # Unreachable: the loop always returns or raises above.
+        # Kept as a type-checker safety net (mypy reports last_error
+        # may be unbound without it).
+        raise last_error  # pragma: no cover

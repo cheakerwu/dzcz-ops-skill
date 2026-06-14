@@ -109,9 +109,11 @@ async def test_lock_manager_concurrent_access():
         task("task2", "profile1"),
     )
 
-    # One should succeed, one should fail
-    assert "task1_success" in results
-    assert "task2_failed" in results
+    # Exactly one should succeed and one should fail (order is not deterministic)
+    successes = [r for r in results if r.endswith("_success")]
+    failures = [r for r in results if r.endswith("_failed")]
+    assert len(successes) == 1
+    assert len(failures) == 1
 
 
 @pytest.mark.asyncio
@@ -146,3 +148,25 @@ async def test_lock_manager_get_lock_owner():
     # Release lock
     lock_manager.release_profile_lock("profile1", "task1")
     assert lock_manager.get_lock_owner("profile1") is None
+
+
+@pytest.mark.asyncio
+async def test_lock_manager_release_nonexistent_profile():
+    """Test releasing lock for a profile that was never locked."""
+    lock_manager = LockManager()
+
+    with pytest.raises(LockError, match="No lock exists for profile"):
+        lock_manager.release_profile_lock("profile1", "task1")
+
+
+@pytest.mark.asyncio
+async def test_lock_manager_release_cleans_up_profile_locks():
+    """Test that releasing a lock removes the entry from profile_locks."""
+    lock_manager = LockManager()
+
+    await lock_manager.acquire_profile_lock("profile1", "task1")
+    assert "profile1" in lock_manager.profile_locks
+
+    lock_manager.release_profile_lock("profile1", "task1")
+    assert "profile1" not in lock_manager.profile_locks
+    assert lock_manager.is_locked("profile1") is False

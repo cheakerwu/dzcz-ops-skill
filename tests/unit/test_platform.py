@@ -6,7 +6,8 @@ from dzcz_merchant_ops.config.platform import (
     PlatformAdapter,
     WindowsAdapter,
     MacOSAdapter,
-    get_platform_adapter
+    get_platform_adapter,
+    _validate_profile_id,
 )
 
 
@@ -97,3 +98,88 @@ def test_get_platform_adapter_unsupported(monkeypatch):
     monkeypatch.setattr('sys.platform', 'linux')
     with pytest.raises(ValueError):
         get_platform_adapter()
+
+
+# --- APPDATA environment variable tests ---
+
+def test_windows_profile_dir_appdata_not_set(monkeypatch):
+    """Test WindowsAdapter raises EnvironmentError when APPDATA is not set."""
+    monkeypatch.delenv("APPDATA", raising=False)
+    adapter = WindowsAdapter()
+    with pytest.raises(EnvironmentError, match="APPDATA"):
+        adapter.get_profile_dir("test-profile")
+
+
+def test_windows_state_dir_appdata_not_set(monkeypatch):
+    """Test WindowsAdapter raises EnvironmentError when APPDATA is not set."""
+    monkeypatch.delenv("APPDATA", raising=False)
+    adapter = WindowsAdapter()
+    with pytest.raises(EnvironmentError, match="APPDATA"):
+        adapter.get_state_dir()
+
+
+def test_windows_profile_dir_appdata_empty(monkeypatch):
+    """Test WindowsAdapter raises EnvironmentError when APPDATA is empty string."""
+    monkeypatch.setenv("APPDATA", "")
+    adapter = WindowsAdapter()
+    with pytest.raises(EnvironmentError, match="APPDATA"):
+        adapter.get_profile_dir("test-profile")
+
+
+def test_windows_state_dir_appdata_empty(monkeypatch):
+    """Test WindowsAdapter raises EnvironmentError when APPDATA is empty string."""
+    monkeypatch.setenv("APPDATA", "")
+    adapter = WindowsAdapter()
+    with pytest.raises(EnvironmentError, match="APPDATA"):
+        adapter.get_state_dir()
+
+
+# --- profile_id validation tests ---
+
+@pytest.mark.parametrize("profile_id", [
+    "normal-profile",
+    "profile_123",
+    "my.profile.v2",
+    "ABC-123_def.test",
+])
+def test_validate_profile_id_valid(profile_id):
+    """Test _validate_profile_id accepts safe characters."""
+    # Should not raise
+    _validate_profile_id(profile_id)
+
+
+@pytest.mark.parametrize("profile_id", [
+    "",
+    ".",
+    "..",
+    "...",
+    "a..b",
+    "path/traversal",
+    "..\\escape",
+    "profile with spaces",
+    "profile@special",
+    "profile#hash",
+    "profile$dollar",
+    "../../../etc/passwd",
+    "..\\..\\Windows\\System32",
+    "profile\x00null",
+])
+def test_validate_profile_id_rejected(profile_id):
+    """Test _validate_profile_id rejects unsafe characters."""
+    with pytest.raises(ValueError):
+        _validate_profile_id(profile_id)
+
+
+def test_windows_profile_dir_path_traversal(monkeypatch):
+    """Test WindowsAdapter rejects path traversal in profile_id."""
+    monkeypatch.setenv("APPDATA", "C:\\Users\\test\\AppData\\Roaming")
+    adapter = WindowsAdapter()
+    with pytest.raises(ValueError, match="unsafe characters"):
+        adapter.get_profile_dir("../../../etc/passwd")
+
+
+def test_macos_profile_dir_path_traversal():
+    """Test MacOSAdapter rejects path traversal in profile_id."""
+    adapter = MacOSAdapter()
+    with pytest.raises(ValueError, match="unsafe characters"):
+        adapter.get_profile_dir("..\\..\\escape")

@@ -33,6 +33,14 @@ class MockStep(Step):
         return context
 
 
+class ValueErrorStep(Step):
+    """Mock step that raises a non-BrowserError exception."""
+
+    async def execute(self, context: Context) -> Context:
+        """Execute step raising ValueError."""
+        raise ValueError("non-browser error")
+
+
 @pytest.mark.asyncio
 async def test_step_execute_success():
     """Test successful step execution."""
@@ -100,3 +108,47 @@ async def test_step_execute_non_retryable_error():
 
     # Should have tried only once (non-retryable)
     assert step.execution_count == 1
+
+
+@pytest.mark.asyncio
+async def test_step_non_browser_error_propagates():
+    """Test that non-BrowserError exceptions propagate without retry."""
+    step = ValueErrorStep()
+    context = Context(
+        profile_id="test",
+        workflow="test",
+        inputs={}
+    )
+
+    with pytest.raises(ValueError, match="non-browser error"):
+        await step.execute_with_retry(context)
+
+
+@pytest.mark.asyncio
+async def test_step_max_retries_zero():
+    """Test step execution with max_retries=0 (no retries allowed)."""
+    step = MockStep(success=False, retryable=True)
+    context = Context(
+        profile_id="test",
+        workflow="test",
+        inputs={}
+    )
+
+    retry_policy = RetryPolicy(max_retries=0, base_delay=0.01)
+    step.retry_policy = retry_policy
+
+    with pytest.raises(BrowserError):
+        await step.execute_with_retry(context)
+
+    # Should have tried only once (no retries)
+    assert step.execution_count == 1
+
+
+@pytest.mark.asyncio
+async def test_step_default_retry_policy():
+    """Test that Step uses default RetryPolicy when none provided."""
+    step = MockStep(success=True)
+
+    assert step.retry_policy.max_retries == 3
+    assert step.retry_policy.base_delay == 1.0
+    assert step.retry_policy.max_delay == 30.0
