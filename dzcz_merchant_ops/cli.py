@@ -1087,6 +1087,31 @@ def command_task_run(args: argparse.Namespace) -> dict[str, Any]:
     )
     db.commit()
 
+    # Check success_condition if workflow defines one
+    if status == "succeeded" and operation_result is None:
+        # operation_result is null but workflow expects it
+        success_condition = workflow.get("success_condition")
+        if success_condition:
+            status = "failed"
+            error = "Workflow completed but operation_result is null - expected success_condition not met"
+            (artifact_dir / "error.txt").write_text(error, encoding="utf-8")
+
+            # Generate failure report
+            from dzcz_merchant_ops.failure_reporter import FailureStage, create_failure_report
+            failure_report = create_failure_report(
+                run_id=run_id,
+                workflow_id=workflow_id,
+                stage=FailureStage.CONFIRM,
+                reason=error,
+                next_action="Check deterministic workflow script - it may not be returning eval result",
+                artifact_dir=str(artifact_dir),
+                screenshot=str(final_screenshot) if final_screenshot.exists() else None,
+            )
+            (artifact_dir / "failure_report.json").write_text(
+                failure_report.to_json(),
+                encoding="utf-8",
+            )
+
     # Build response with failure report if failed
     response = {
         "status": status,
