@@ -1521,6 +1521,75 @@ def add_profile_lookup_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--account-label")
 
 
+def command_scheduler_submit(args: argparse.Namespace) -> dict[str, Any]:
+    """Submit a task to the scheduler."""
+    from dzcz_merchant_ops.hermes.task_queue import TaskQueue
+    from dzcz_merchant_ops.hermes.resource_manager import ResourceManager
+    from dzcz_merchant_ops.hermes.scheduler import Scheduler
+
+    data_dir = Path(args.data_dir).expanduser()
+    queue = TaskQueue(data_dir)
+    resource_manager = ResourceManager(max_instances=3)
+    scheduler = Scheduler(queue, resource_manager)
+
+    inputs = parse_inputs(args.input, None)
+
+    task_id = scheduler.submit_task(
+        user_id=args.user_id,
+        platform=args.platform,
+        merchant_key=args.merchant_key,
+        workflow_id=args.workflow,
+        inputs=inputs,
+        priority=args.priority,
+    )
+
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "message": f"Task submitted: {task_id}",
+    }
+
+
+def command_scheduler_status(args: argparse.Namespace) -> dict[str, Any]:
+    """Show scheduler status."""
+    from dzcz_merchant_ops.hermes.task_queue import TaskQueue
+    from dzcz_merchant_ops.hermes.resource_manager import ResourceManager
+
+    data_dir = Path(args.data_dir).expanduser()
+    queue = TaskQueue(data_dir)
+    resource_manager = ResourceManager(max_instances=3)
+
+    pending_tasks = queue.get_pending_tasks()
+
+    return {
+        "status": "ok",
+        "pending_tasks": len(pending_tasks),
+        "running_tasks": resource_manager.running_count,
+        "max_instances": resource_manager.max_instances,
+    }
+
+
+def command_scheduler_tasks(args: argparse.Namespace) -> dict[str, Any]:
+    """List user tasks."""
+    from dzcz_merchant_ops.hermes.task_queue import TaskQueue, TaskStatus
+    from dzcz_merchant_ops.hermes.resource_manager import ResourceManager
+    from dzcz_merchant_ops.hermes.scheduler import Scheduler
+
+    data_dir = Path(args.data_dir).expanduser()
+    queue = TaskQueue(data_dir)
+    resource_manager = ResourceManager(max_instances=3)
+    scheduler = Scheduler(queue, resource_manager)
+
+    status = TaskStatus(args.status) if args.status else None
+    tasks = scheduler.get_user_tasks(args.user_id, status=status, limit=args.limit)
+
+    return {
+        "status": "ok",
+        "tasks": tasks,
+        "count": len(tasks),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="merchant-ops")
     parser.add_argument("--data-dir", default=str(default_data_dir()))
@@ -1603,6 +1672,29 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_deprecate = workflow_sub.add_parser("deprecate", help="deprecate a workflow")
     workflow_deprecate.add_argument("workflow_id")
     workflow_deprecate.set_defaults(func=command_workflow_deprecate)
+
+    # scheduler subcommands
+    scheduler = sub.add_parser("scheduler", help="task scheduler commands")
+    scheduler_sub = scheduler.add_subparsers(dest="scheduler_command", required=True)
+
+    scheduler_submit = scheduler_sub.add_parser("submit", help="submit a task to the scheduler")
+    scheduler_submit.add_argument("--user-id", required=True, help="user ID")
+    scheduler_submit.add_argument("--platform", required=True, help="platform name")
+    scheduler_submit.add_argument("--merchant-key", required=True, help="merchant key")
+    scheduler_submit.add_argument("--workflow", required=True, help="workflow ID")
+    scheduler_submit.add_argument("--input", action="append", help="input key=value; repeatable")
+    scheduler_submit.add_argument("--priority", type=int, default=2, help="priority (1=high, 2=medium, 3=low)")
+    scheduler_submit.set_defaults(func=command_scheduler_submit)
+
+    scheduler_status = scheduler_sub.add_parser("status", help="show scheduler status")
+    scheduler_status.set_defaults(func=command_scheduler_status)
+
+    scheduler_tasks = scheduler_sub.add_parser("tasks", help="list user tasks")
+    scheduler_tasks.add_argument("--user-id", required=True, help="user ID")
+    scheduler_tasks.add_argument("--status", help="filter by status (pending, running, completed, failed)")
+    scheduler_tasks.add_argument("--limit", type=int, default=10, help="max tasks to show")
+    scheduler_tasks.set_defaults(func=command_scheduler_tasks)
+
     return parser
 
 
